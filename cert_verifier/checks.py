@@ -1,21 +1,20 @@
+import hashlib
 import json
 import logging
 from datetime import datetime
 from threading import Lock
 
 import bitcoin
-import hashlib
 import pytz
 from bitcoin.signmessage import BitcoinMessage, VerifyMessage
-from cert_schema import BlockcertValidationError
-from cert_schema import normalize_jsonld
 from cert_core import BlockcertVersion, Chain
 from cert_core import chain_to_bitcoin_network
 from cert_core.cert_model.model import SignatureType
-from chainpoint.chainpoint import Chainpoint
-
+from cert_schema import BlockcertValidationError
+from cert_schema import normalize_jsonld
 from cert_verifier import StepStatus
 from cert_verifier.errors import InvalidCertificateError
+from chainpoint.chainpoint import Chainpoint
 
 lock = Lock()
 
@@ -96,7 +95,11 @@ class BinaryFileIntegrityChecker(VerificationCheck):
     def do_execute(self):
         blockchain_hash = self.transaction_info.op_return
         local_hash = hashlib.sha256(self.content_to_verify).hexdigest()
-        return hashes_match(blockchain_hash, local_hash)
+        match = hashes_match(blockchain_hash, local_hash)
+        if not match:
+            logging.error(f"BinaryFileIntegrityChecker failed - Blockchain hash: '{blockchain_hash}'' | "
+                          f"Local hash: '{local_hash}'")
+        return match
 
 
 class NormalizedJsonLdIntegrityChecker(VerificationCheck):
@@ -107,10 +110,12 @@ class NormalizedJsonLdIntegrityChecker(VerificationCheck):
 
     def do_execute(self):
         try:
-            normalized = normalize_jsonld(self.content_to_verify,
-                                          detect_unmapped_fields=self.detect_unmapped_fields)
-            local_hash = hash_normalized(normalized)
+            normalized_f = normalize_jsonld(self.content_to_verify, detect_unmapped_fields=False)
+            local_hash = hash_normalized(normalized_f)
             cert_hashes_match = hashes_match(local_hash, self.expected_hash)
+            if not cert_hashes_match:
+                logging.error(f"NormalizedJsonLdIntegrityChecker failed - Expected hash: '{self.expected_hash}'' | "
+                              f"Local hash: '{local_hash}'")
             return cert_hashes_match
         except BlockcertValidationError:
             logging.error('Certificate has been modified', exc_info=True)
@@ -123,8 +128,10 @@ class MerkleRootIntegrityChecker(VerificationCheck):
         self.actual_merkle_root = actual_merkle_root
 
     def do_execute(self):
-        merkle_root_matches = hashes_match(self.expected_merkle_root,
-                                           self.actual_merkle_root)
+        merkle_root_matches = hashes_match(self.expected_merkle_root, self.actual_merkle_root)
+        if not merkle_root_matches:
+            logging.error(f"MerkleRootIntegrityChecker failed - Actual: '{self.actual_merkle_root}' | "
+                          f"Expected: '{self.expected_merkle_root}'")
         return merkle_root_matches
 
 
@@ -136,7 +143,10 @@ class ReceiptIntegrityChecker(VerificationCheck):
         cp = Chainpoint()
         # overwrite with Chainpoint type before passing to validator
         self.merkle_proof['type'] = 'ChainpointSHA256v2'
-        valid_receipt = cp.valid_receipt(json.dumps(self.merkle_proof))
+        dumped_proof = json.dumps(self.merkle_proof)
+        valid_receipt = cp.valid_receipt(dumped_proof)
+        if not valid_receipt:
+            logging.error(f"ReceiptIntegrityChecker failed - Dumped proof: '{dumped_proof}'")
         return valid_receipt
 
 
@@ -156,7 +166,7 @@ class RevocationChecker(VerificationCheck):
     def do_execute(self):
         revoked = any(k in self.revoked_values for k in self.values_to_check)
         if revoked:
-            logging.error('This certificate has been revoked by the issuer')
+            logging.error('RevocationChecker failed - This certificate has been revoked by the issuer')
         return not revoked
 
 
@@ -169,7 +179,10 @@ class ExpiredChecker(VerificationCheck):
             return True
         # compare to current time. If expires_date is timezone naive, we assume UTC
         now_tz = pytz.UTC.localize(datetime.utcnow())
-        return now_tz < self.expires
+        current = now_tz < self.expires
+        if not current:
+            logging.error(f"ExpiredChecker failed - Now: '{now_tz}' | Expires: '{self.expires}'")
+        return current
 
 
 class EmbeddedSignatureChecker(VerificationCheck):
@@ -181,7 +194,14 @@ class EmbeddedSignatureChecker(VerificationCheck):
 
     def do_execute(self):
 
-        if self.signing_key is None or self.content_to_verify is None or self.signature_value is None:
+        if self.signing_key is None:
+            logging.error('EmbeddedSignatureChecker failed - signing key is none')
+            return False
+        if self.content_to_verify is None:
+            logging.error('EmbeddedSignatureChecker failed - content to verify is none')
+            return False
+        if self.signature_value is None:
+            logging.error('EmbeddedSignatureChecker failed - signature value is none')
             return False
         message = BitcoinMessage(self.content_to_verify)
         try:
@@ -209,13 +229,23 @@ class AuthenticityChecker(VerificationCheck):
             key = self.issuer_key_map[self.transaction_signing_key]
             res = True
             if key.created:
-                res &= self.transaction_signing_date >= key.created
+                created_ok = self.transaction_signing_date >= key.created
+                if not created_ok:
+                    logging.error('AuthenticityChecker failed - transaction_signing_date >= key.created.')
+                res &= created_ok
             if key.revoked:
-                res &= self.transaction_signing_date <= key.revoked
+                revoked_ok = self.transaction_signing_date <= key.revoked
+                if not revoked_ok:
+                    logging.error('AuthenticityChecker failed - transaction_signing_date >= key.revoked.')
+                res &= revoked_ok
             if key.expires:
-                res &= self.transaction_signing_date <= key.expires
+                expired_ok = self.transaction_signing_date <= key.expires
+                if not expired_ok:
+                    logging.error('AuthenticityChecker failed - transaction_signing_date <= key.expires')
+                res &= expired_ok
             return res
         else:
+            logging.error('Transaction signing key does not equal the keys in the issuer profile.')
             return False
 
 
