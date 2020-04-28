@@ -97,8 +97,9 @@ class BinaryFileIntegrityChecker(VerificationCheck):
         local_hash = hashlib.sha256(self.content_to_verify).hexdigest()
         match = hashes_match(blockchain_hash, local_hash)
         if not match:
-            logging.error(f"BinaryFileIntegrityChecker failed - Blockchain hash: '{blockchain_hash}'' | "
-                          f"Local hash: '{local_hash}'")
+            logging.error(
+                f"BinaryFileIntegrityChecker failed - Blockchain hash: '{blockchain_hash}'' | Local hash: '{local_hash}'"
+            )
         return match
 
 
@@ -114,8 +115,9 @@ class NormalizedJsonLdIntegrityChecker(VerificationCheck):
             local_hash = hash_normalized(normalized_f)
             cert_hashes_match = hashes_match(local_hash, self.expected_hash)
             if not cert_hashes_match:
-                logging.error(f"NormalizedJsonLdIntegrityChecker failed - Expected hash: '{self.expected_hash}'' | "
-                              f"Local hash: '{local_hash}'")
+                logging.error(
+                    f"NormalizedJsonLdIntegrityChecker failed - Expected hash: '{self.expected_hash}'' | Local hash: '{local_hash}'"
+                )
             return cert_hashes_match
         except BlockcertValidationError:
             logging.error('Certificate has been modified', exc_info=True)
@@ -225,8 +227,10 @@ class AuthenticityChecker(VerificationCheck):
         self.issuer_key_map = issuer_key_map
 
     def do_execute(self):
-        if self.transaction_signing_key in self.issuer_key_map:
-            key = self.issuer_key_map[self.transaction_signing_key]
+        signing_key = self.transaction_signing_key.casefold()
+        issuer_keys = {k.casefold(): v for k, v in self.issuer_key_map.items()}
+        if signing_key in issuer_keys:
+            key = issuer_keys[signing_key]
             res = True
             if key.created:
                 created_ok = self.transaction_signing_date >= key.created
@@ -245,7 +249,10 @@ class AuthenticityChecker(VerificationCheck):
                 res &= expired_ok
             return res
         else:
-            logging.error('Transaction signing key does not equal the keys in the issuer profile.')
+            logging.error(
+                f'Transaction signing key "{signing_key}" can\'t be found among the keys in the '
+                f'issuer profile: "{issuer_keys}".'
+            )
             return False
 
 
