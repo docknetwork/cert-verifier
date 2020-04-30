@@ -3,14 +3,20 @@ Connectors supporting Bitcoin transaction lookups. This is used in the Blockchai
 (http://www.blockcerts.org/) for validating certificates on the blockchain.
 """
 import logging
+import os
 
 import requests
+import requests_cache
+
 from cert_core import BlockchainType, BlockcertVersion, Chain
 from cert_core import PUBKEY_PREFIX
 
 from cert_verifier import IssuerInfo, IssuerKey
 from cert_verifier import TransactionData
 from cert_verifier.errors import *
+
+if os.environ.get('REQUEST_CACHE_EXPIRES_AFTER'):
+    requests_cache.install_cache('connectors_cache', expire_after=int(os.environ.get('REQUEST_CACHE_EXPIRES_AFTER')))
 
 headers = {
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
